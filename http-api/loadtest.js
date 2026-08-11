@@ -21,7 +21,8 @@ export const options = {
 };
 
 export default function () {
-  const res = http.get(`${BASE_URL}/health`);
+  // const res = http.get(`${BASE_URL}/health`);
+  const res = http.get(`${BASE_URL}/error-load-test-rollback`);
   check(res, {
     'status is 200': (r) => r.status === 200,
     'body is ok':    (r) => r.json('status') === 'ok',

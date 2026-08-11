@@ -4,7 +4,7 @@ const app = express();
 
 // The only route: a health check the pipeline uses to verify the deploy.
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok - error on test' });
+  res.json({ status: 'ok' });
 });
 
 // Only start listening when run directly (so tests can import the app).
