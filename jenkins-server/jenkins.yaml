@@ -19,6 +19,14 @@ jobs:
                   url('https://github.com/godinhojoao/jenkins-demo.git')
                 }
                 branch('*/main')
+                extensions {
+                  // Only build when files under http-api/ change. Commits that
+                  // touch only README, docs, etc. are ignored by polling.
+                  pathRestriction {
+                    includedRegions('http-api/.*')
+                    excludedRegions('')
+                  }
+                }
               }
             }
             scriptPath('http-api/Jenkinsfile')

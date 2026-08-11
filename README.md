@@ -2,7 +2,7 @@
 
 A small Express API with a Jenkins pipeline that tests, builds, deploys, and
 load-tests it, and rolls back automatically if something fails. The code lives on
-a public GitHub repo. Jenkins runs on a Raspberry Pi and polls GitHub for new
+a public GitHub repo. Jenkins runs on your own machine and polls GitHub for new
 commits.
 
 ## Layout
@@ -23,7 +23,7 @@ jenkins-server/   the Jenkins server (Docker)
 ```
 
 Ports are 8090 for the Jenkins UI and 8091 for the app, to avoid clashing with
-other things on the Pi.
+other things on the machine.
 
 ## Pipeline
 
@@ -31,6 +31,123 @@ The stages in `http-api/Jenkinsfile` are: Test (build fails if a test fails),
 Build (image tagged by commit), Deploy (`docker compose up -d`), Verify (health
 check), and Load test (k6). If anything fails after Deploy, it redeploys the last
 good image.
+
+## The two files that matter
+
+Everything else is boilerplate. These two files are the whole setup.
+
+`jenkins-server/jenkins.yaml` defines the Jenkins job as code. When the Jenkins
+container starts, the Configuration as Code plugin reads this and creates the
+`jenkins-demo` pipeline: where the repo is, which branch, where the Jenkinsfile
+lives, to poll GitHub every minute, and to only build when files under
+`http-api/` change.
+
+```yaml
+jobs:
+  - script: |
+      pipelineJob('jenkins-demo') {
+        description('test/build/deploy/verify pipeline for http-api — managed by JCasC')
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/godinhojoao/jenkins-demo.git')
+                }
+                branch('*/main')
+                extensions {
+                  // Only build when files under http-api/ change. Commits that
+                  // touch only README, docs, etc. are ignored by polling.
+                  pathRestriction {
+                    includedRegions('http-api/.*')
+                    excludedRegions('')
+                  }
+                }
+              }
+            }
+            scriptPath('http-api/Jenkinsfile')
+            lightweight(true)
+          }
+        }
+        triggers {
+          scm('* * * * *')   // poll GitHub every minute
+        }
+      }
+```
+
+`http-api/Jenkinsfile` is the pipeline itself: test, build, deploy, verify, load
+test, and roll back on failure. It runs from the repo root, so each stage steps
+into `http-api/` before running Docker.
+
+```groovy
+pipeline {
+  agent any
+
+  environment {
+    IMAGE = 'http-api'
+    TAG   = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"    // tag image by commit
+    STATE = "${JENKINS_HOME}/http-api.last_good"      // remembers last good tag
+  }
+
+  stages {
+    stage('Test') {
+      // runs `npm test` inside the Docker build; fails the run if a test fails
+      steps { dir('http-api') { sh 'docker build --target test -t $IMAGE:test .' } }
+    }
+    stage('Build') {
+      steps { dir('http-api') { sh 'docker build --target runtime -t $IMAGE:$TAG .' } }
+    }
+    stage('Deploy') {
+      steps { dir('http-api') { sh 'IMAGE_TAG=$TAG docker compose up -d' } }
+    }
+    stage('Verify') {
+      // liveness: is the app even up? fail fast before wasting time load testing
+      steps {
+        dir('http-api') {
+          sh '''
+            for n in $(seq 1 10); do
+              if docker compose exec -T app wget -qO- http://localhost:3000/health >/dev/null 2>&1; then
+                echo healthy; exit 0
+              fi
+              sleep 2
+            done
+            echo "health check failed"; exit 1
+          '''
+        }
+      }
+    }
+    stage('Load test') {
+      // k6 hits the published port under load; a breached threshold (see
+      // loadtest.js) exits non-zero, fails the stage, and triggers rollback.
+      steps {
+        dir('http-api') {
+          sh '''
+            docker run --rm -i --network host \
+              -e BASE_URL=http://localhost:8091 \
+              grafana/k6 run - < loadtest.js
+            echo $TAG > "$STATE"      # only now is this tag the rollback target
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      // auto-rollback: redeploy the last version that passed the load test
+      dir('http-api') {
+        sh '''
+          if [ -f "$STATE" ]; then
+            PREV=$(cat "$STATE")
+            echo "rolling back to $PREV"
+            IMAGE_TAG=$PREV docker compose up -d
+          fi
+        '''
+      }
+    }
+  }
+}
+```
 
 ## Examples
 
@@ -59,7 +176,7 @@ Load test error: the app deployed but failed the load test, so it rolled back.
 
    If your username differs, update the `url(...)` in `jenkins-server/jenkins.yaml`.
 
-2. Start Jenkins on the Pi:
+2. Start Jenkins on your machine:
 
    ```bash
    cd jenkins-server
@@ -76,8 +193,8 @@ Load test error: the app deployed but failed the load test, so it rolled back.
 
 ## Triggering
 
-GitHub can't reach a Pi on a local network (no public IP, and no VPN like
-Tailscale by choice), so the job polls GitHub every 2 minutes instead of using a
+GitHub can't reach a machine on a local network (no public IP, and no VPN like
+Tailscale by choice), so the job polls GitHub every minute instead of using a
 webhook. With a public IP or a VPS you could use a GitHub webhook for instant
 builds.
 
