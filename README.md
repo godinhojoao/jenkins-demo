@@ -90,6 +90,20 @@ with read access to the repo, add it in Jenkins under Credentials as a
 username/token pair, and reference it in the job's Git settings. Use a token, not
 your password, since GitHub no longer accepts passwords over HTTPS.
 
+## Updating
+
+If you change `jenkins-server/jenkins.yaml` (the job config), restart Jenkins so
+it reloads:
+
+```bash
+cd jenkins-server
+docker compose restart jenkins
+```
+
+If you change `http-api/Jenkinsfile` (the pipeline), you don't restart anything.
+Just commit and push. Jenkins pulls the latest Jenkinsfile from GitHub on the
+next build.
+
 ## Reset
 
 Run inside `jenkins-server/` or `http-api/` to remove containers, volumes, and
