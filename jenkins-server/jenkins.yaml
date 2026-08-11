@@ -26,6 +26,6 @@ jobs:
           }
         }
         triggers {
-          scm('H/1 * * * *')   // poll GitHub every ~1 minute for new commits
+          scm('* * * * *')   // poll GitHub every minute (H/1 was parsed as hourly)
         }
       }

@@ -32,6 +32,20 @@ Build (image tagged by commit), Deploy (`docker compose up -d`), Verify (health
 check), and Load test (k6). If anything fails after Deploy, it redeploys the last
 good image.
 
+## Examples
+
+Success: all stages pass and the app is deployed.
+
+![Pipeline success](pipeline-success-example.png)
+
+Test error: a failing test stops the pipeline, so nothing is deployed.
+
+![Test error](pipeline-test-error-example.png)
+
+Load test error: the app deployed but failed the load test, so it rolled back.
+
+![Load test error](pipeline-load-test-error-example.png)
+
 ## Run it
 
 1. Push this folder to a public GitHub repo named `jenkins-demo`:
