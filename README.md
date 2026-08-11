@@ -250,3 +250,20 @@ controller: another physical machine, a VM, a VPS, a cloud instance, or just
 another container on the same host. To use one, define it in `jenkins.yaml` and
 point the pipeline at it with `agent { label '...' }` instead of `agent any`.
 Since this pipeline uses Docker, the agent also needs access to a Docker daemon.
+
+## Homelab tip
+
+This project uses GitHub with polling so it works anywhere. In a self-hosted
+homelab, though, a better setup is to run [Gitea](https://about.gitea.com/) next
+to Jenkins and trigger builds with a [webhook](https://docs.gitea.com/usage/webhooks)
+instead of polling. Both services are on the same network, so the webhook reaches
+Jenkins instantly, and you host your own Git server with no dependency on a cloud
+provider. **That is the whole point of a homelab: keep your code and your pipeline
+under your own control.**
+
+## References
+
+- [Jenkins Pipeline](https://www.jenkins.io/doc/book/pipeline/)
+- [Jenkins Configuration as Code (JCasC)](https://www.jenkins.io/projects/jcasc/)
+- [Job DSL plugin](https://plugins.jenkins.io/job-dsl/)
+- [Gitea webhooks](https://docs.gitea.com/usage/webhooks)
