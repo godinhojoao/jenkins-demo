@@ -1,0 +1,5 @@
+node_modules
+npm-debug.log
+
+# local secrets (never commit)
+jenkins-server/.env

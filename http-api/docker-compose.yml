@@ -1,0 +1,10 @@
+# Fixed project name "http-api" so the deploy always updates THIS stack,
+# independent of the Jenkins workspace/job name it runs from.
+name: http-api
+
+services:
+  app:
+    image: http-api:${IMAGE_TAG:-latest}   # tag the pipeline passes in
+    ports:
+      - "8091:3000"                         # app on the host at :8091 (8081 is taken)
+    restart: unless-stopped

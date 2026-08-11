@@ -1,0 +1,31 @@
+# Creates the `jenkins-demo` pipeline when the Jenkins container starts, using
+# the configuration-as-code + job-dsl plugins (installed in the Dockerfile).
+#
+# Public GitHub repo => anonymous checkout, so no credentials/secrets here.
+#
+# Trigger: GitHub can't reach a LAN Pi (no public IP and no VPN like Tailscale
+# by choice), so the job polls GitHub every 1 minute instead of using a webhook.
+# -- If we had a public ip or ran it into a VPS we could use a github webhook to trigger the jenkins pipeline
+
+jobs:
+  - script: |
+      pipelineJob('jenkins-demo') {
+        description('test/build/deploy/verify pipeline for http-api — managed by JCasC')
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/godinhojoao/jenkins-demo.git')
+                }
+                branch('*/main')
+              }
+            }
+            scriptPath('http-api/Jenkinsfile')
+            lightweight(true)
+          }
+        }
+        triggers {
+          scm('H/1 * * * *')   // poll GitHub every ~1 minute for new commits
+        }
+      }

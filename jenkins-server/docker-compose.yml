@@ -1,0 +1,20 @@
+# Jenkins server. Runs the Docker CLI so pipelines build/deploy on the host.
+# Ports shifted off the defaults (8080/50000 are already in use on this Pi).
+services:
+  jenkins:
+    build: .
+    user: root                                    # so it can use the host's Docker
+    environment:
+      # Load the job from JCasC (jenkins.yaml) on startup.
+      - CASC_JENKINS_CONFIG=/var/jenkins_casc/jenkins.yaml
+    ports:
+      - "8090:8080"                               # Jenkins web UI  -> http://server.local:8090
+      - "50001:50000"                             # agent port
+    volumes:
+      - jenkins_home:/var/jenkins_home            # persist jobs and config
+      - /var/run/docker.sock:/var/run/docker.sock # build/run containers on the host
+      - ./jenkins.yaml:/var/jenkins_casc/jenkins.yaml:ro   # job-as-code (JCasC)
+    restart: unless-stopped
+
+volumes:
+  jenkins_home:

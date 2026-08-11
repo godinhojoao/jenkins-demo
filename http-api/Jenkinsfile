@@ -1,0 +1,70 @@
+pipeline {
+  agent any
+
+  environment {
+    IMAGE = 'http-api'
+    TAG   = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"    // tag image by commit
+    STATE = "${JENKINS_HOME}/http-api.last_good"      // remembers last good tag
+  }
+
+  stages {
+    stage('Test') {
+      // runs `npm test` inside the Docker build; fails the run if a test fails
+      steps { dir('http-api') { sh 'docker build --target test -t $IMAGE:test .' } }
+    }
+    stage('Build') {
+      steps { dir('http-api') { sh 'docker build --target runtime -t $IMAGE:$TAG .' } }
+    }
+    stage('Deploy') {
+      steps { dir('http-api') { sh 'IMAGE_TAG=$TAG docker compose up -d' } }
+    }
+    stage('Verify') {
+      // liveness: is the app even up? fail fast before wasting time load testing
+      steps {
+        dir('http-api') {
+          sh '''
+            for n in $(seq 1 10); do
+              if docker compose exec -T app wget -qO- http://localhost:3000/health >/dev/null 2>&1; then
+                echo healthy; exit 0
+              fi
+              sleep 2
+            done
+            echo "health check failed"; exit 1
+          '''
+        }
+      }
+    }
+    stage('Load test') {
+      // k6 hits the published port under load; a breached threshold (see
+      // loadtest.js) exits non-zero, fails the stage, and triggers rollback.
+      // Script is piped via stdin (`run -`): a bind mount wouldn't work because
+      // `docker run` executes on the HOST daemon, where the workspace path
+      // (inside the Jenkins container) doesn't exist.
+      steps {
+        dir('http-api') {
+          sh '''
+            docker run --rm -i --network host \
+              -e BASE_URL=http://localhost:8091 \
+              grafana/k6 run - < loadtest.js
+            echo $TAG > "$STATE"      # only now is this tag the rollback target
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    failure { // called if any stage got exit 1
+      // auto-rollback: redeploy the last version that passed the load test
+      dir('http-api') {
+        sh '''
+          if [ -f "$STATE" ]; then
+            PREV=$(cat "$STATE")
+            echo "rolling back to $PREV"
+            IMAGE_TAG=$PREV docker compose up -d
+          fi
+        '''
+      }
+    }
+  }
+}

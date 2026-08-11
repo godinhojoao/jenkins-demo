@@ -1,0 +1,13 @@
+{
+  "name": "http-api",
+  "version": "1.0.0",
+  "description": "Tiny Express API with one /health route — the app the Jenkins pipeline deploys.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
