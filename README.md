@@ -1,9 +1,14 @@
 # jenkins-demo
 
+![Jenkins idea](jenkins-idea.png)
+
 A small Express API with a Jenkins pipeline that tests, builds, deploys, and
 load-tests it, and rolls back automatically if something fails. The code lives on
 a public GitHub repo. Jenkins runs on your own machine and polls GitHub for new
 commits.
+
+This README covers setup. For how it works and the theory behind it (what Jenkins
+is, the pipeline stages, the job as code, and triggering), see [theory.md](theory.md).
 
 ## Layout
 
@@ -24,144 +29,6 @@ jenkins-server/   the Jenkins server (Docker)
 
 Ports are 8090 for the Jenkins UI and 8091 for the app, to avoid clashing with
 other things on the machine.
-
-## Pipeline
-
-The stages in `http-api/Jenkinsfile` are: Test (build fails if a test fails),
-Build (image tagged by commit), Deploy (`docker compose up -d`), Verify (health
-check), and Load test (k6). If anything fails after Deploy, it redeploys the last
-good image.
-
-## The two files that matter
-
-Everything else is boilerplate. These two files are the whole setup.
-
-`jenkins-server/jenkins.yaml` defines the Jenkins job as code. When the Jenkins
-container starts, the Configuration as Code plugin reads this and creates the
-`jenkins-demo` pipeline: where the repo is, which branch, where the Jenkinsfile
-lives, to poll GitHub every minute, and to only build when files under
-`http-api/` change.
-
-```yaml
-jobs:
-  - script: |
-      pipelineJob('jenkins-demo') {
-        description('test/build/deploy/verify pipeline for http-api — managed by JCasC')
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('https://github.com/godinhojoao/jenkins-demo.git')
-                }
-                branch('*/main')
-                extensions {
-                  // Only build when files under http-api/ change. Commits that
-                  // touch only README, docs, etc. are ignored by polling.
-                  pathRestriction {
-                    includedRegions('http-api/.*')
-                    excludedRegions('')
-                  }
-                }
-              }
-            }
-            scriptPath('http-api/Jenkinsfile')
-            lightweight(true)
-          }
-        }
-        triggers {
-          scm('* * * * *')   // poll GitHub every minute
-        }
-      }
-```
-
-`http-api/Jenkinsfile` is the pipeline itself: test, build, deploy, verify, load
-test, and roll back on failure. It runs from the repo root, so each stage steps
-into `http-api/` before running Docker.
-
-```groovy
-pipeline {
-  agent any
-
-  environment {
-    IMAGE = 'http-api'
-    TAG   = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"    // tag image by commit
-    STATE = "${JENKINS_HOME}/http-api.last_good"      // remembers last good tag
-  }
-
-  stages {
-    stage('Test') {
-      // runs `npm test` inside the Docker build; fails the run if a test fails
-      steps { dir('http-api') { sh 'docker build --target test -t $IMAGE:test .' } }
-    }
-    stage('Build') {
-      steps { dir('http-api') { sh 'docker build --target runtime -t $IMAGE:$TAG .' } }
-    }
-    stage('Deploy') {
-      steps { dir('http-api') { sh 'IMAGE_TAG=$TAG docker compose up -d' } }
-    }
-    stage('Verify') {
-      // liveness: is the app even up? fail fast before wasting time load testing
-      steps {
-        dir('http-api') {
-          sh '''
-            for n in $(seq 1 10); do
-              if docker compose exec -T app wget -qO- http://localhost:3000/health >/dev/null 2>&1; then
-                echo healthy; exit 0
-              fi
-              sleep 2
-            done
-            echo "health check failed"; exit 1
-          '''
-        }
-      }
-    }
-    stage('Load test') {
-      // k6 hits the published port under load; a breached threshold (see
-      // loadtest.js) exits non-zero, fails the stage, and triggers rollback.
-      steps {
-        dir('http-api') {
-          sh '''
-            docker run --rm -i --network host \
-              -e BASE_URL=http://localhost:8091 \
-              grafana/k6 run - < loadtest.js
-            echo $TAG > "$STATE"      # only now is this tag the rollback target
-          '''
-        }
-      }
-    }
-  }
-
-  post {
-    failure {
-      // auto-rollback: redeploy the last version that passed the load test
-      dir('http-api') {
-        sh '''
-          if [ -f "$STATE" ]; then
-            PREV=$(cat "$STATE")
-            echo "rolling back to $PREV"
-            IMAGE_TAG=$PREV docker compose up -d
-          fi
-        '''
-      }
-    }
-  }
-}
-```
-
-## Examples
-
-Success: all stages pass and the app is deployed.
-
-![Pipeline success](pipeline-success-example.png)
-
-Test error: a failing test stops the pipeline, so nothing is deployed.
-
-![Test error](pipeline-test-error-example.png)
-
-Load test error: the app deployed but failed the load test, so it rolled back.
-
-![Load test error](pipeline-load-test-error-example.png)
 
 ## Run it
 
@@ -188,15 +55,8 @@ Load test error: the app deployed but failed the load test, so it rolled back.
    install the suggested plugins, and create a user. Jenkins creates the
    `jenkins-demo` job by itself from `jenkins.yaml`.
 
-3. Push a commit. Jenkins polls GitHub every 2 minutes and runs the pipeline.
-   When it passes, the app is at http://server.local:8091/health.
-
-## Triggering
-
-GitHub can't reach a machine on a local network (no public IP, and no VPN like
-Tailscale by choice), so the job polls GitHub every minute instead of using a
-webhook. With a public IP or a VPS you could use a GitHub webhook for instant
-builds.
+3. Push a commit. Jenkins polls GitHub every minute and runs the pipeline. When it
+   passes, the app is at http://server.local:8091/health.
 
 ## GitHub access
 
@@ -229,41 +89,3 @@ images (this deletes data):
 ```bash
 docker compose down -v --rmi all --remove-orphans
 ```
-
-## Agents
-
-This runs on a single node: the same Jenkins container is the controller (UI,
-scheduling, config) and also runs the pipeline steps (`agent any`). I kept it
-this way because it's a homelab with one machine and my own code.
-
-You could instead run builds on separate agents. The real advantages are:
-
-- Security: builds run away from the controller, so they can't reach its config
-  and credentials. This matters most for untrusted code (like public pull
-  requests).
-- Scale: spread many builds across several machines and run them in parallel.
-- Clean environments: use a fresh, disposable container per build.
-- Different platforms: build on another OS or CPU architecture.
-
-An agent can be almost anything that runs Java and connects back to the
-controller: another physical machine, a VM, a VPS, a cloud instance, or just
-another container on the same host. To use one, define it in `jenkins.yaml` and
-point the pipeline at it with `agent { label '...' }` instead of `agent any`.
-Since this pipeline uses Docker, the agent also needs access to a Docker daemon.
-
-## Homelab tip
-
-This project uses GitHub with polling so it works anywhere. In a self-hosted
-homelab, though, a better setup is to run [Gitea](https://about.gitea.com/) next
-to Jenkins and trigger builds with a [webhook](https://docs.gitea.com/usage/webhooks)
-instead of polling. Both services are on the same network, so the webhook reaches
-Jenkins instantly, and you host your own Git server with no dependency on a cloud
-provider. **That is the whole point of a homelab: keep your code and your pipeline
-under your own control.**
-
-## References
-
-- [Jenkins Pipeline](https://www.jenkins.io/doc/book/pipeline/)
-- [Jenkins Configuration as Code (JCasC)](https://www.jenkins.io/projects/jcasc/)
-- [Job DSL plugin](https://plugins.jenkins.io/job-dsl/)
-- [Gitea webhooks](https://docs.gitea.com/usage/webhooks)
